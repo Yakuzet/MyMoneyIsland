@@ -1,9 +1,3 @@
-"""Island Tracker — çalışma süresi ve kazanç takibi.
-
-Ekranın üstünde duran küçük bir ada: başlat/duraklat, oturum kazancı ve süresi.
-Uygulama kapalıyken çalıştığın süreyi "Süre ekle" ile sonradan girebilirsin.
-"""
-
 from __future__ import annotations
 
 import ctypes
@@ -83,30 +77,51 @@ from PyQt6.QtWidgets import (
 APP_NAME = "IslandTracker"
 STATE_VERSION = 2
 
-CURRENCIES = ("TRY", "USD", "EUR", "GBP")
 CURRENCY_NAMES = {
-    "TRY": "Türk lirası",
-    "USD": "ABD doları",
+    "USD": "US dollar",
     "EUR": "Euro",
-    "GBP": "İngiliz sterlini",
+    "GBP": "British pound",
+    "TRY": "Turkish lira",
+    "CHF": "Swiss franc",
+    "JPY": "Japanese yen",
+    "CAD": "Canadian dollar",
+    "AUD": "Australian dollar",
+    "CNY": "Chinese yuan",
+    "INR": "Indian rupee",
+    "BRL": "Brazilian real",
+    "MXN": "Mexican peso",
+    "KRW": "South Korean won",
 }
-SYMBOLS = {"TRY": "₺", "USD": "$", "EUR": "€", "GBP": "£"}
+SYMBOLS = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "TRY": "₺",
+    "CHF": "CHF ",
+    "JPY": "¥",
+    "CAD": "C$",
+    "AUD": "A$",
+    "CNY": "CN¥",
+    "INR": "₹",
+    "BRL": "R$",
+    "MXN": "MX$",
+    "KRW": "₩",
+}
+CURRENCIES = tuple(CURRENCY_NAMES)
+FOREIGN = tuple(c for c in CURRENCIES if c != "USD")
 
 ZERO = Decimal("0")
 HOUR = Decimal("3600")
 DAY_SECONDS = 24 * 3600
 
-# Bu kadar saniye boyunca güncelleme gelmezse (uyku, kilit vb.)
-# o aralık sayılmaz ve sayaç duraklatılır.
 INTERRUPTION_SECONDS = 30
 
-RATE_URL = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=TRY,EUR,GBP"
+RATE_URL = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=" + ",".join(FOREIGN)
 RATE_REFRESH_MS = 60 * 60 * 1000
 RATE_RETRY_MS = 2 * 60 * 1000
 
-KIND_LABELS = {"timer": "Sayaç", "manual": "Manuel", "legacy": "Önceki"}
+KIND_LABELS = {"timer": "Timer", "manual": "Manual", "legacy": "Legacy"}
 
-# Renkler
 BG = "#16161a"
 SURFACE = "#1e1e24"
 SURFACE_HI = "#26262d"
@@ -120,10 +135,7 @@ ACCENT_TEXT = "#0e1a14"
 DANGER = "#f07178"
 
 
-# ---------------------------------------------------------------- yardımcılar
-
 def D(value, default=ZERO):
-    """Güvenli, negatif olmayan Decimal dönüşümü."""
     try:
         result = Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
@@ -135,8 +147,7 @@ def D(value, default=ZERO):
 
 def fmt_number(value, places=2):
     quant = Decimal(1).scaleb(-places)
-    text = f"{D(value).quantize(quant, ROUND_HALF_UP):,.{places}f}"
-    return text.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+    return f"{D(value).quantize(quant, ROUND_HALF_UP):,.{places}f}"
 
 
 def fmt_money(amount, currency):
@@ -154,8 +165,8 @@ def fmt_span(seconds):
     minutes = int(seconds) // 60
     hours, minutes = divmod(minutes, 60)
     if hours:
-        return f"{hours} sa {minutes:02d} dk"
-    return f"{minutes} dk"
+        return f"{hours} h {minutes:02d} min"
+    return f"{minutes} min"
 
 
 def today_iso():
@@ -174,13 +185,12 @@ def new_id():
 
 
 def dark_titlebar(widget):
-    """Windows 10/11 başlık çubuğunu koyu yapar (desteklenmiyorsa sessizce geçer)."""
     if sys.platform != "win32":
         return
     try:
         hwnd = int(widget.winId())
         value = ctypes.c_int(1)
-        for attribute in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE
+        for attribute in (20, 19):
             if ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value)
             ) == 0:
@@ -190,7 +200,6 @@ def dark_titlebar(widget):
 
 
 def make_icon_image(size=256):
-    """Tepsi ve .exe simgesi (harici dosya gerektirmez)."""
     image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     s = size / 256
@@ -215,16 +224,11 @@ def make_icon_image(size=256):
 
 
 def save_icon(path):
-    """build.py tarafından .ico üretmek için kullanılır."""
     if not make_icon_image(256).save(str(path), "ICO"):
-        raise SystemExit(f"Simge kaydedilemedi: {path}")
+        raise SystemExit(f"Could not save icon: {path}")
 
-
-# ---------------------------------------------------------------- veri
 
 class Store:
-    """state.json okuma/yazma. Eski sürüm verisi otomatik aktarılır."""
-
     def __init__(self, directory: Path):
         self.directory = directory
         self.path = directory / "state.json"
@@ -235,16 +239,16 @@ class Store:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
-                raise ValueError("Geçersiz durum dosyası.")
+                raise ValueError("Invalid state file.")
             if raw.get("version") == STATE_VERSION:
                 self.data = self.normalize(raw)
             else:
-                self.backup("state-v1-yedek.json")
+                self.backup("state-v1-backup.json")
                 self.data = self.migrate_v1(raw)
                 self.save()
         except Exception:
-            logging.exception("Durum dosyası okunamadı; varsayılanlarla başlanıyor.")
-            self.backup(f"state-bozuk-{time.time_ns()}.json", move=True)
+            logging.exception("Could not read the state file, starting with defaults.")
+            self.backup(f"state-corrupt-{time.time_ns()}.json", move=True)
 
     def backup(self, name, move=False):
         try:
@@ -254,17 +258,16 @@ class Store:
             elif not target.exists():
                 target.write_bytes(self.path.read_bytes())
         except OSError:
-            logging.exception("Yedek alınamadı.")
+            logging.exception("Backup failed.")
 
     @staticmethod
     def defaults():
         return {
             "version": STATE_VERSION,
             "wage": "0",
-            "currency": "TRY",
-            "alternate": "USD",
-            # Her kur: 1 USD karşılığı o para biriminden kaç birim.
-            "rates": {"USD": "1", "TRY": None, "EUR": None, "GBP": None},
+            "currency": "USD",
+            "alternate": "EUR",
+            "rates": {"USD": "1", **dict.fromkeys(FOREIGN)},
             "fx_date": None,
             "fx_fetched_at": None,
             "show_clock": False,
@@ -334,7 +337,6 @@ class Store:
 
     @classmethod
     def migrate_v1(cls, raw):
-        """Önceki sürüm (USD tabanlı, tarihsiz toplam) verisini aktarır."""
         data = cls.defaults()
         rates = cls.clean_rates(raw.get("rates"))
         data["rates"] = rates
@@ -369,7 +371,7 @@ class Store:
                 "seconds": str(total_seconds),
                 "amount": str(D(raw.get("total_usd")) * factor),
                 "kind": "legacy",
-                "note": "Önceki sürümden aktarıldı",
+                "note": "Imported from previous version",
             })
         return data
 
@@ -390,8 +392,6 @@ class Store:
 
 
 class Tracker:
-    """Gerçek geçen süreyi ölçer; oturuma ve günün sayaç kaydına ekler."""
-
     def __init__(self, store: Store):
         self.store = store
         self.running = False
@@ -402,7 +402,6 @@ class Tracker:
         return self.store.data
 
     def current_entry(self, create=False):
-        """Devam eden çalışmanın geçmişteki kaydı (her çalışma ayrı bir kayıt)."""
         wanted = self.data.get("current_entry")
         if wanted:
             for entry in self.data["entries"]:
@@ -422,7 +421,6 @@ class Tracker:
         return self.running or D(self.data["session_seconds"]) > 0
 
     def accrue(self):
-        """Geçen süreyi ekler. Uzun bir kesinti olduysa True döner."""
         now = time.monotonic()
         elapsed = now - self.last
         self.last = now
@@ -450,7 +448,6 @@ class Tracker:
         self.last = time.monotonic()
 
     def finish(self):
-        """Çalışmayı bitirir: kaydı kapatır, sayacı sıfırlar. Biten süreyi döner."""
         self.accrue()
         seconds = D(self.data["session_seconds"])
         self.running = False
@@ -476,16 +473,12 @@ def summarize(entries, start=None, end=None):
     return seconds, amount
 
 
-# ---------------------------------------------------------------- kur servisi
-
 class Bridge(QObject):
     rates_ready = pyqtSignal(object)
     rates_failed = pyqtSignal(str)
 
 
 class RateService:
-    """Döviz kurlarını arka planda indirir (Frankfurter / ECB referans kurları)."""
-
     def __init__(self, bridge: Bridge):
         self.bridge = bridge
         self.lock = threading.Lock()
@@ -503,35 +496,33 @@ class RateService:
                 with urllib.request.urlopen(request, timeout=12) as response:
                     body = response.read(200_001)
                 if len(body) > 200_000:
-                    raise ValueError("Beklenmeyen büyüklükte yanıt.")
+                    raise ValueError("Response too large.")
                 payload = json.loads(body.decode("utf-8"))
                 if payload.get("base") != "USD":
-                    raise ValueError("Beklenmeyen kur yanıtı.")
+                    raise ValueError("Unexpected rate response.")
                 raw = payload.get("rates") or {}
                 rates = {"USD": "1"}
-                for currency in ("TRY", "EUR", "GBP"):
+                for currency in FOREIGN:
                     value = D(raw.get(currency))
                     if value <= 0:
-                        raise ValueError(f"{currency} kuru eksik.")
+                        raise ValueError(f"Missing rate for {currency}.")
                     rates[currency] = str(value)
                 fx_date = str(payload.get("date"))
                 if parse_iso_date(fx_date) is None:
-                    raise ValueError("Kur tarihi eksik.")
+                    raise ValueError("Missing rate date.")
                 self.bridge.rates_ready.emit({
                     "rates": rates,
                     "date": fx_date,
                     "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 })
             except Exception as exc:
-                logging.warning("Kur güncellemesi başarısız: %s", exc)
+                logging.warning("Rate update failed: %s", exc)
                 self.bridge.rates_failed.emit(str(exc))
             finally:
                 self.lock.release()
 
         threading.Thread(target=worker, name="IslandRates", daemon=True).start()
 
-
-# ---------------------------------------------------------------- stil
 
 STYLE = f"""
 * {{ font-family: "Segoe UI"; font-size: 10pt; }}
@@ -619,7 +610,6 @@ QCalendarWidget #qt_calendar_navigationbar {{ background: {SURFACE_HI}; }}
 
 
 def app_stylesheet(directory: Path):
-    """Açılır menü oku için küçük bir PNG üretir ve stil sayfasına bağlar."""
     arrow = directory / "arrow.png"
     try:
         size = 30
@@ -635,7 +625,7 @@ def app_stylesheet(directory: Path):
         p.end()
         image.save(str(arrow), "PNG")
     except Exception:
-        logging.exception("Ok simgesi üretilemedi.")
+        logging.exception("Could not create the arrow image.")
     return STYLE.replace("ARROW_PATH", arrow.as_posix())
 
 
@@ -655,8 +645,6 @@ def dark_palette():
     return palette
 
 
-# ---------------------------------------------------------------- diyaloglar
-
 class Dialog(QDialog):
     def __init__(self, parent, title):
         super().__init__(parent)
@@ -668,7 +656,7 @@ class Dialog(QDialog):
         super().showEvent(event)
 
 
-def ask(parent, title, text, ok_text="Tamam", cancel_text=None, destructive=False):
+def ask(parent, title, text, ok_text="OK", cancel_text=None, destructive=False):
     box = QMessageBox(parent)
     box.setWindowTitle(title)
     box.setText(text)
@@ -684,7 +672,6 @@ def ask(parent, title, text, ok_text="Tamam", cancel_text=None, destructive=Fals
 
 
 def no_buttons(spin):
-    # Oklar QSS ile gizlenir (NoButtons, Fusion+QSS'te metni görünmez yapıyor).
     spin.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     editor = spin.findChild(QLineEdit)
     if editor is not None:
@@ -722,7 +709,7 @@ def wage_spin(currency, value):
     spin.setRange(0, 1_000_000)
     spin.setDecimals(2)
     spin.setValue(float(value))
-    spin.setSuffix(f" {SYMBOLS[currency]}/sa")
+    spin.setSuffix(f" {SYMBOLS[currency].strip()}/h")
     return spin
 
 
@@ -731,10 +718,8 @@ def spin_decimal(spin):
 
 
 class AddTimeDialog(Dialog):
-    """Uygulama kapalıyken veya daha önce çalışılan süreyi ekler/düzenler."""
-
     def __init__(self, island, parent, entry=None):
-        super().__init__(parent, "Kaydı düzenle" if entry else "Süre ekle")
+        super().__init__(parent, "Edit entry" if entry else "Add time")
         self.island = island
         self.entry = entry
         self.result_entry = None
@@ -746,8 +731,8 @@ class AddTimeDialog(Dialog):
         layout.setSpacing(14)
         header(
             layout,
-            "Kaydı düzenle" if entry else "Süre ekle",
-            "Uygulama kapalıyken ya da daha önce çalıştığın süreyi kaydet.",
+            "Edit entry" if entry else "Add time",
+            "Log time you worked while the app was closed.",
         )
 
         form = QFormLayout()
@@ -760,10 +745,10 @@ class AddTimeDialog(Dialog):
         self.date.setCalendarPopup(True)
         self.date.setMaximumDate(QDate.currentDate())
         self.date.setDisplayFormat("d MMMM yyyy, dddd")
-        form.addRow("Tarih", self.date)
+        form.addRow("Date", self.date)
 
-        self.by_duration = QRadioButton("Toplam süre")
-        self.by_range = QRadioButton("Saat aralığı")
+        self.by_duration = QRadioButton("Duration")
+        self.by_range = QRadioButton("Time range")
         self.by_duration.setChecked(True)
         group = QButtonGroup(self)
         group.addButton(self.by_duration)
@@ -773,7 +758,7 @@ class AddTimeDialog(Dialog):
         modes.addWidget(self.by_duration)
         modes.addWidget(self.by_range)
         modes.addStretch(1)
-        form.addRow("Giriş", modes)
+        form.addRow("Mode", modes)
 
         self.stack = QStackedWidget()
         duration_page = QWidget()
@@ -781,10 +766,10 @@ class AddTimeDialog(Dialog):
         row.setContentsMargins(0, 0, 0, 0)
         self.hours = no_buttons(QSpinBox())
         self.hours.setRange(0, 24)
-        self.hours.setSuffix(" sa")
+        self.hours.setSuffix(" h")
         self.minutes = no_buttons(QSpinBox())
         self.minutes.setRange(0, 59)
-        self.minutes.setSuffix(" dk")
+        self.minutes.setSuffix(" min")
         row.addWidget(self.hours)
         row.addWidget(self.minutes)
         self.stack.addWidget(duration_page)
@@ -803,23 +788,23 @@ class AddTimeDialog(Dialog):
         row.addWidget(dash)
         row.addWidget(self.end)
         self.stack.addWidget(range_page)
-        form.addRow("Süre", self.stack)
+        form.addRow("Time", self.stack)
 
         self.wage = wage_spin(self.currency, D(island.data["wage"]))
-        form.addRow("Saatlik ücret", self.wage)
+        form.addRow("Hourly wage", self.wage)
 
         self.note = QLineEdit()
-        self.note.setPlaceholderText("İsteğe bağlı")
+        self.note.setPlaceholderText("Optional")
         self.note.setMaxLength(200)
-        form.addRow("Not", self.note)
+        form.addRow("Note", self.note)
 
         self.preview = QLabel()
         self.preview.setObjectName("preview")
         layout.addWidget(self.preview)
 
-        cancel = QPushButton("Vazgeç")
+        cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Kaydet" if entry else "Ekle")
+        save = QPushButton("Save" if entry else "Add")
         save.setObjectName("primary")
         save.setDefault(True)
         save.clicked.connect(self.accept_entry)
@@ -860,7 +845,7 @@ class AddTimeDialog(Dialog):
             return self.hours.value() * 3600 + self.minutes.value() * 60
         start = self.start.time().msecsSinceStartOfDay() // 1000
         end = self.end.time().msecsSinceStartOfDay() // 1000
-        if end <= start:  # gece yarısını geçen vardiya
+        if end <= start:
             end += DAY_SECONDS
         return end - start
 
@@ -870,13 +855,13 @@ class AddTimeDialog(Dialog):
     def update_preview(self):
         seconds = self.seconds()
         if seconds <= 0:
-            self.preview.setText("Bir süre gir.")
+            self.preview.setText("Enter a duration.")
             return
         extra = ""
         if self.by_range.isChecked() and (
             self.end.time().msecsSinceStartOfDay() <= self.start.time().msecsSinceStartOfDay()
         ):
-            extra = "  (ertesi güne geçiyor)"
+            extra = "  (ends next day)"
         self.preview.setText(
             f"{fmt_span(seconds)}  ·  {fmt_money(self.amount(seconds), self.currency)}{extra}"
         )
@@ -884,10 +869,10 @@ class AddTimeDialog(Dialog):
     def accept_entry(self):
         seconds = self.seconds()
         if seconds <= 0:
-            ask(self, "Süre ekle", "Süre sıfırdan büyük olmalı.")
+            ask(self, "Add time", "Duration must be greater than zero.")
             return
         if seconds > DAY_SECONDS:
-            ask(self, "Süre ekle", "Tek bir kayıt 24 saati geçemez.")
+            ask(self, "Add time", "A single entry can't be longer than 24 hours.")
             return
         self.result_entry = {
             "id": self.entry["id"] if self.entry else new_id(),
@@ -903,7 +888,7 @@ class AddTimeDialog(Dialog):
 
 class SettingsDialog(Dialog):
     def __init__(self, island):
-        super().__init__(island, "Ayarlar")
+        super().__init__(island, "Settings")
         self.island = island
         self.values = None
         data = island.data
@@ -913,7 +898,7 @@ class SettingsDialog(Dialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 22, 24, 20)
         layout.setSpacing(14)
-        header(layout, "Ayarlar")
+        header(layout, "Settings")
 
         form = QFormLayout()
         form.setHorizontalSpacing(16)
@@ -928,21 +913,21 @@ class SettingsDialog(Dialog):
         self.wage = wage_spin(data["currency"], D(data["wage"]))
 
         self.alternate = QComboBox()
-        self.alternate.addItem("Yok", None)
+        self.alternate.addItem("None", None)
         for code in CURRENCIES:
             self.alternate.addItem(f"{code} · {CURRENCY_NAMES[code]}", code)
         alt = data["alternate"]
         self.alternate.setCurrentIndex(0 if alt is None else CURRENCIES.index(alt) + 1)
 
-        self.clock = QCheckBox("Süreyi kazancın altında göster")
+        self.clock = QCheckBox("Show elapsed time under earnings")
         self.clock.setChecked(data["show_clock"])
 
-        form.addRow("Saatlik ücret", self.wage)
-        form.addRow("Para birimi", self.currency)
-        form.addRow("İkinci para birimi", self.alternate)
+        form.addRow("Hourly wage", self.wage)
+        form.addRow("Currency", self.currency)
+        form.addRow("Second currency", self.alternate)
         form.addRow("", self.clock)
 
-        hint = QLabel("Fareyi adanın üzerinde biraz tutunca ikinci para birimi görünür.")
+        hint = QLabel("Hover over the island for a moment to see the second currency.")
         hint.setObjectName("small")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -952,12 +937,12 @@ class SettingsDialog(Dialog):
         card = QVBoxLayout(rates_card)
         card.setContentsMargins(14, 12, 14, 12)
         card.setSpacing(6)
-        title = QLabel("Döviz kurları")
+        title = QLabel("Exchange rates")
         title.setStyleSheet("font-weight: 600;")
         self.rate_text = QLabel()
         self.rate_text.setObjectName("muted")
         self.rate_text.setWordWrap(True)
-        refresh = QPushButton("Kurları yenile")
+        refresh = QPushButton("Refresh rates")
         refresh.clicked.connect(island.rates.refresh)
         top = QHBoxLayout()
         top.addWidget(title)
@@ -967,12 +952,12 @@ class SettingsDialog(Dialog):
         card.addWidget(self.rate_text)
         layout.addWidget(rates_card)
 
-        quit_button = QPushButton("Uygulamadan çık")
+        quit_button = QPushButton("Quit app")
         quit_button.setObjectName("danger")
         quit_button.clicked.connect(self.quit_app)
-        cancel = QPushButton("Vazgeç")
+        cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
-        save = QPushButton("Kaydet")
+        save = QPushButton("Save")
         save.setObjectName("primary")
         save.setDefault(True)
         save.clicked.connect(self.accept_settings)
@@ -989,18 +974,18 @@ class SettingsDialog(Dialog):
         data = self.island.data
         rates = data["rates"]
         parts = [
-            f"{fmt_number(rates[c], 4 if D(rates[c]) < 10 else 2)} {SYMBOLS[c]}"
-            for c in ("TRY", "EUR", "GBP") if rates.get(c)
+            f"{fmt_number(rates[c], 4 if D(rates[c]) < 10 else 2)} {c}"
+            for c in FOREIGN if rates.get(c)
         ]
         if not parts:
-            text = "Henüz indirilmedi. İnternet bağlantısını kontrol edip yenile."
+            text = "Not downloaded yet. Check your connection and refresh."
         else:
-            text = "1 $ = " + "  ·  ".join(parts)
+            text = "1 USD = " + "  ·  ".join(parts)
             if data.get("fx_date"):
                 day = QDate.fromString(data["fx_date"], Qt.DateFormat.ISODate)
-                text += f"\nAvrupa Merkez Bankası referans kuru, {QLocale().toString(day, 'd MMMM yyyy')}"
+                text += f"\nECB reference rate, {QLocale().toString(day, 'd MMMM yyyy')}"
         if self.island.rate_error:
-            text += "\nSon yenileme başarısız oldu; kayıtlı kurlar kullanılıyor."
+            text += "\nLast refresh failed, using saved rates."
         self.rate_text.setText(text)
 
     def currency_changed(self):
@@ -1008,7 +993,7 @@ class SettingsDialog(Dialog):
         converted = self.island.convert(spin_decimal(self.wage), self.previous_currency, new)
         if converted is not None:
             self.wage.setValue(float(converted))
-        self.wage.setSuffix(f" {SYMBOLS[new]}/sa")
+        self.wage.setSuffix(f" {SYMBOLS[new].strip()}/h")
         self.previous_currency = new
 
     def accept_settings(self):
@@ -1018,9 +1003,9 @@ class SettingsDialog(Dialog):
             Decimal(1), data["currency"], currency
         ) is None:
             ask(
-                self, "Ayarlar",
-                f"{currency} için kur bilgisi yok. Önce kurları yenile.\n"
-                "Mevcut kayıtlar yeni para birimine bu kurla çevrilir.",
+                self, "Settings",
+                f"No exchange rate for {currency} yet. Refresh rates first.\n"
+                "Existing entries are converted to the new currency at that rate.",
             )
             return
         alternate = self.alternate.currentData()
@@ -1040,10 +1025,10 @@ class SettingsDialog(Dialog):
 
 
 class HistoryDialog(Dialog):
-    COLUMNS = ("Tarih", "Tür", "Süre", "Kazanç", "Not")
+    COLUMNS = ("Date", "Type", "Duration", "Earned", "Note")
 
     def __init__(self, island):
-        super().__init__(island, "Geçmiş")
+        super().__init__(island, "History")
         self.island = island
         self.row_ids = []
         self.resize(700, 540)
@@ -1051,13 +1036,13 @@ class HistoryDialog(Dialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(14)
-        header(layout, "Geçmiş")
+        header(layout, "History")
 
         cards = QHBoxLayout()
         cards.setSpacing(10)
         self.cards = {}
         for key, title in (
-            ("today", "Bugün"), ("week", "Bu hafta"), ("month", "Bu ay"), ("all", "Toplam"),
+            ("today", "Today"), ("week", "This week"), ("month", "This month"), ("all", "All time"),
         ):
             frame = QFrame()
             frame.setObjectName("card")
@@ -1099,21 +1084,21 @@ class HistoryDialog(Dialog):
         self.table.itemDoubleClicked.connect(lambda _item: self.edit_selected())
         layout.addWidget(self.table, 1)
 
-        self.empty = QLabel("Henüz kayıt yok. Sayacı başlat ya da “Süre ekle” ile geçmiş bir çalışmayı gir.")
+        self.empty = QLabel("No entries yet. Start the timer, or use “Add time” to log past work.")
         self.empty.setObjectName("muted")
         self.empty.setWordWrap(True)
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.empty)
 
-        add = QPushButton("Süre ekle")
+        add = QPushButton("Add time")
         add.setObjectName("primary")
         add.clicked.connect(self.add)
-        self.edit_button = QPushButton("Düzenle")
+        self.edit_button = QPushButton("Edit")
         self.edit_button.clicked.connect(self.edit_selected)
-        self.delete_button = QPushButton("Sil")
+        self.delete_button = QPushButton("Delete")
         self.delete_button.setObjectName("danger")
         self.delete_button.clicked.connect(self.delete_selected)
-        close = QPushButton("Kapat")
+        close = QPushButton("Close")
         close.clicked.connect(self.accept)
         button_row(layout, add, self.edit_button, self.delete_button, None, close,
                    stretch_first=False)
@@ -1206,7 +1191,7 @@ class HistoryDialog(Dialog):
         if entry is None:
             return
         if entry["kind"] != "manual":
-            ask(self, "Düzenle", "Yalnızca elle eklenen kayıtlar düzenlenebilir.")
+            ask(self, "Edit", "Only manually added entries can be edited.")
             return
         self.island.open_add(entry=entry, parent=self)
         self.refresh()
@@ -1217,10 +1202,10 @@ class HistoryDialog(Dialog):
             return
         day = QLocale().toString(QDate.fromString(entry["date"], Qt.DateFormat.ISODate), "d MMMM yyyy")
         text = (
-            f"{day} tarihli {KIND_LABELS[entry['kind']].lower()} kaydı "
-            f"({fmt_span(D(entry['seconds']))}) silinsin mi?\nBu işlem geri alınamaz."
+            f"Delete the {KIND_LABELS[entry['kind']].lower()} entry from {day} "
+            f"({fmt_span(D(entry['seconds']))})?\nThis can't be undone."
         )
-        if not ask(self, "Kaydı sil", text, "Sil", "Vazgeç", destructive=True):
+        if not ask(self, "Delete entry", text, "Delete", "Cancel", destructive=True):
             return
         self.island.tracker.accrue()
         self.island.data["entries"] = [
@@ -1230,11 +1215,7 @@ class HistoryDialog(Dialog):
         self.refresh()
 
 
-# ---------------------------------------------------------------- ada
-
 class HoverBar(QWidget):
-    """Ada üzerine gelince beliren küçük şerit (ayrı pencere, tıklamaları geçirir)."""
-
     HEIGHT = 26
 
     def __init__(self, owner):
@@ -1248,7 +1229,7 @@ class HoverBar(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.parts = []  # [(metin, renk), ...]
+        self.parts = []
         self.wanted = False
         self.font_ = QFont("Segoe UI", 9)
         self.fade = QPropertyAnimation(self, b"windowOpacity", self)
@@ -1310,8 +1291,6 @@ class HoverBar(QWidget):
 
 
 class ActionBubble(QWidget):
-    """Başlat düğmesinin solundan çıkan yuvarlak: çalışmayı bitir (■) ya da kapat (✕)."""
-
     clicked = pyqtSignal()
     hovered = pyqtSignal(bool)
 
@@ -1327,7 +1306,7 @@ class ActionBubble(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFixedSize(size, size)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mode = "quit"  # "finish" | "quit"
+        self.mode = "quit"
         self.hot = False
         self.wanted = False
         self.anchor = QPoint()
@@ -1344,7 +1323,7 @@ class ActionBubble(QWidget):
             self.mode = mode
             self.update()
         self.setToolTip(
-            "Çalışmayı bitir ve kaydet" if mode == "finish" else "Uygulamayı kapat"
+            "Finish and save" if mode == "finish" else "Quit"
         )
 
     def set_anchor(self, point, slide):
@@ -1445,12 +1424,11 @@ class Island(QWidget):
 
         self.hovered = False
         self.hover_target = None
-        self.press = None  # (global_pos, window_pos, target)
+        self.press = None
         self.dragging = False
         self.text_width = 0
-        # Kaydetme animasyonu: None ya da 0..1 arası ilerleme.
         self.save_phase = None
-        self.save_old = ("", None)  # (eski tutar, eski alt satır)
+        self.save_old = ("", None)
         self.save_anim = QVariantAnimation(self)
         self.save_anim.setDuration(1600)
         self.save_anim.setStartValue(0.0)
@@ -1486,7 +1464,6 @@ class Island(QWidget):
         self.bubble.hovered.connect(self.bubble_hovered)
         self.bubble_side = "left"
 
-        # Ada ile yuvarlak arasında geçerken her şey kapanmasın diye kısa gecikme.
         self.leave_timer = QTimer(self)
         self.leave_timer.setSingleShot(True)
         self.leave_timer.setInterval(160)
@@ -1522,8 +1499,6 @@ class Island(QWidget):
         self.restore_position()
         QTimer.singleShot(0, self.rates.refresh)
 
-    # -- veri / para --------------------------------------------------------
-
     @property
     def data(self):
         return self.store.data
@@ -1555,8 +1530,6 @@ class Island(QWidget):
         value = self.convert(amount, base, currency)
         return "—" if value is None else fmt_money(value, currency)
 
-    # -- düzen ve çizim -----------------------------------------------------
-
     def fonts(self):
         amount = QFont("Segoe UI", 12)
         amount.setWeight(QFont.Weight.DemiBold)
@@ -1575,7 +1548,6 @@ class Island(QWidget):
         need = max(QFontMetrics(amount_font).horizontalAdvance(t) for t in texts)
         if self.data["show_clock"]:
             need = max(need, QFontMetrics(sub_font).horizontalAdvance(self.session_text()))
-        # Yalnızca büyür: rakamlar değiştikçe ada titremez.
         self.text_width = max(self.text_width, need + 2)
         text_width = self.text_width
 
@@ -1596,7 +1568,6 @@ class Island(QWidget):
         return fmt_clock(D(self.data["session_seconds"]))
 
     def subtitle(self):
-        """Kazancın altındaki satır: yalnızca ayar açıksa süre."""
         if self.data["show_clock"]:
             return self.session_text()
         return None
@@ -1612,7 +1583,6 @@ class Island(QWidget):
         p.setBrush(QColor(20, 20, 24, 246))
         p.drawRoundedRect(rect, h / 2, h / 2)
 
-        # başlat / duraklat
         running = self.tracker.running
         hot = self.hover_target == "play"
         p.setPen(Qt.PenStyle.NoPen)
@@ -1643,7 +1613,6 @@ class Island(QWidget):
         if self.save_phase is not None:
             self.paint_save(p, amount_font, sub_font, subtitle)
         else:
-            # tutar (ikinci para birimine yumuşak geçiş)
             p.setFont(amount_font)
             p.setPen(QColor(TEXT))
             primary = self.money(session)
@@ -1657,13 +1626,11 @@ class Island(QWidget):
                 p.drawText(amount_rect.translated(0, 6 * (1 - mix)), align, self.money(session, alt))
             p.setOpacity(1)
 
-            # alt satır (yalnızca "Süreyi kazancın altında göster" açıksa)
             if subtitle:
                 p.setFont(sub_font)
                 p.setPen(QColor(ACCENT if running else MUTED))
                 p.drawText(self.sub_rect, align, subtitle)
 
-        # menü
         mc = self.menu_rect.center()
         p.setPen(Qt.PenStyle.NoPen)
         if self.hover_target == "menu":
@@ -1673,10 +1640,7 @@ class Island(QWidget):
         for dy in (-4.5, 0, 4.5):
             p.drawEllipse(QPointF(mc.x(), mc.y() + dy), 1.5, 1.5)
 
-    # -- kaydetme animasyonu -------------------------------------------------
-
     def play_save(self):
-        """Yazı yukarı kayar → disket gelip kaydeder → yeni değer aşağıdan gelir (~1,6 sn)."""
         self.save_anim.stop()
         self.mix = 0.0
         self.save_phase = 0.0
@@ -1694,14 +1658,13 @@ class Island(QWidget):
     @staticmethod
     def _seg(phase, start, end):
         t = min(1.0, max(0.0, (phase - start) / (end - start)))
-        return 1 - (1 - t) ** 3  # yumuşak yavaşlama
+        return 1 - (1 - t) ** 3
 
     def paint_save(self, p, amount_font, sub_font, subtitle):
         phase = self.save_phase
         align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         amount_rect = self.amount_rect if subtitle else self.amount_center
         old_amount, old_sub = self.save_old
-        # Kayan yazılar adanın içinde kalsın.
         p.setClipRect(QRectF(self.amount_center.left() - 2, 4,
                              self.amount_center.width() + 4, self.HEIGHT - 8))
 
@@ -1718,11 +1681,9 @@ class Island(QWidget):
                 p.drawText(self.sub_rect.translated(0, dy), align, sub)
             p.setOpacity(1)
 
-        # 1) eski yazı yukarı kayıp kaybolur
         out = self._seg(phase, 0.0, 0.18)
         draw_texts(old_amount, old_sub, -16 * out, 1 - out, ACCENT)
 
-        # 2) disket aşağıdan gelir, kaydeder, yukarı çıkar
         d_in = self._seg(phase, 0.14, 0.34)
         d_out = self._seg(phase, 0.72, 0.88)
         if d_in > 0 and d_out < 1:
@@ -1736,7 +1697,6 @@ class Island(QWidget):
             self.draw_floppy(p, center, 18 * pop, fill)
             p.setOpacity(1)
 
-        # 3) yeni (sıfırlanmış) değer aşağıdan gelir
         new_in = self._seg(phase, 0.82, 1.0)
         draw_texts(
             self.money(D(self.data["session_amount"])), subtitle,
@@ -1746,7 +1706,6 @@ class Island(QWidget):
 
     @staticmethod
     def draw_floppy(p, center, size, fill):
-        """Klasik disket simgesi; 'fill' etiket çizgilerinin yazılma ilerlemesi."""
         s = size
         x, y = center.x() - s / 2, center.y() - s / 2
         cut = s * 0.2
@@ -1757,16 +1716,13 @@ class Island(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(ACCENT))
         p.drawPolygon(body)
-        # metal kapak
         p.setBrush(QColor(ACCENT_TEXT))
         p.drawRect(QRectF(x + s * 0.24, y, s * 0.46, s * 0.3))
         p.setBrush(QColor(ACCENT))
         p.drawRect(QRectF(x + s * 0.52, y + s * 0.05, s * 0.1, s * 0.2))
-        # etiket
         label = QRectF(x + s * 0.16, y + s * 0.48, s * 0.68, s * 0.42)
         p.setBrush(QColor("#f3f3f8"))
         p.drawRoundedRect(label, s * 0.04, s * 0.04)
-        # etikete "yazılan" çizgiler
         p.setBrush(QColor(MUTED))
         for i, row in enumerate((0.3, 0.62)):
             progress = min(1.0, max(0.0, fill * 2 - i))
@@ -1789,10 +1745,8 @@ class Island(QWidget):
         if self.hovered and self.secondary_currency():
             self.animate_mix(1.0)
 
-    # -- zamanlayıcı --------------------------------------------------------
-
     def tick(self):
-        if self.tracker.accrue():  # uyku/kesinti: sayaç sessizce duraklatıldı
+        if self.tracker.accrue():
             self.save()
         self.relayout()
         if self.hovered:
@@ -1803,7 +1757,7 @@ class Island(QWidget):
         self.update()
         if self.tray is not None and int(time.monotonic()) % 5 == 0:
             self.tray.setToolTip(
-                f"Island Tracker — {self.money(D(self.data['session_amount']))}"
+                f"Island Tracker: {self.money(D(self.data['session_amount']))}"
                 f" · {fmt_clock(D(self.data['session_seconds']))}"
             )
 
@@ -1811,8 +1765,6 @@ class Island(QWidget):
         self.tracker.toggle()
         self.update()
         self.save()
-
-    # -- fare ---------------------------------------------------------------
 
     def hit(self, pos):
         point = QPointF(pos)
@@ -1825,7 +1777,7 @@ class Island(QWidget):
     def update_bars(self):
         seconds, amount = summarize(self.data["entries"])
         self.total_bar.set_parts([
-            ("Toplam  ", MUTED),
+            ("Total  ", MUTED),
             (fmt_money(amount, self.data["currency"]), TEXT),
             ("  ·  ", FAINT),
             (fmt_clock(seconds), TEXT),
@@ -1841,7 +1793,6 @@ class Island(QWidget):
         area = screen.availableGeometry()
         gap = 6
 
-        # Yuvarlak: başlat düğmesinin solu; yer yoksa sağ taraf.
         size = self.bubble.width()
         bx = self.x() - size - 4
         self.bubble_side = "left"
@@ -1854,7 +1805,7 @@ class Island(QWidget):
         x = self.x() + (self.width() - bar.width()) // 2
         x = max(area.left(), min(x, area.right() - bar.width() + 1))
         y = self.y() + self.height() + gap
-        if y + bar.height() > area.bottom() + 1:  # altta yer yoksa üste
+        if y + bar.height() > area.bottom() + 1:
             y = self.y() - bar.height() - gap
         bar.move(x, y)
 
@@ -1862,7 +1813,7 @@ class Island(QWidget):
         x = self.x() + self.width() + gap
         if self.bubble_side == "right":
             x += size + 4
-        if x + bar.width() > area.right() + 1:  # sağda yer yoksa sola
+        if x + bar.width() > area.right() + 1:
             x = self.x() - bar.width() - gap
             if self.bubble_side == "left":
                 x -= size + 4
@@ -2001,8 +1952,6 @@ class Island(QWidget):
         else:
             super().keyPressEvent(event)
 
-    # -- menü ve tepsi ------------------------------------------------------
-
     def build_menu(self):
         menu = QMenu(self)
         menu.setWindowFlags(
@@ -2010,20 +1959,20 @@ class Island(QWidget):
             | Qt.WindowType.NoDropShadowWindowHint
         )
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.act_toggle = menu.addAction("Başlat", self.toggle_work)
+        self.act_toggle = menu.addAction("Start", self.toggle_work)
         menu.addSeparator()
-        menu.addAction("Süre ekle…", self.open_add)
-        menu.addAction("Geçmiş…", self.open_history)
-        menu.addAction("Ayarlar…", self.open_settings)
+        menu.addAction("Add time…", self.open_add)
+        menu.addAction("History…", self.open_history)
+        menu.addAction("Settings…", self.open_settings)
         menu.addSeparator()
-        self.act_finish = menu.addAction("Çalışmayı bitir", self.finish_work)
-        self.act_visibility = menu.addAction("Gizle", self.toggle_visibility)
+        self.act_finish = menu.addAction("Finish session", self.finish_work)
+        self.act_visibility = menu.addAction("Hide", self.toggle_visibility)
         menu.addSeparator()
-        menu.addAction("Çıkış", self.shutdown)
+        menu.addAction("Quit", self.shutdown)
 
         def refresh_labels():
-            self.act_toggle.setText("Duraklat" if self.tracker.running else "Başlat")
-            self.act_visibility.setText("Gizle" if self.isVisible() else "Göster")
+            self.act_toggle.setText("Pause" if self.tracker.running else "Start")
+            self.act_visibility.setText("Hide" if self.isVisible() else "Show")
             self.act_finish.setEnabled(self.tracker.has_work())
 
         menu.aboutToShow.connect(refresh_labels)
@@ -2053,8 +2002,6 @@ class Island(QWidget):
         else:
             self.show()
             self.raise_()
-
-    # -- diyaloglar ---------------------------------------------------------
 
     def modal_busy(self):
         self.set_hover(False, immediate=True)
@@ -2092,7 +2039,7 @@ class Island(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         values = dialog.values
-        self.tracker.accrue()  # geçen süre eski ücretle hesaplanır
+        self.tracker.accrue()
         old = self.data["currency"]
         new = values["currency"]
         if new != old:
@@ -2110,18 +2057,15 @@ class Island(QWidget):
         self.save()
 
     def finish_work(self):
-        """Çalışmayı bitirir: Geçmiş'e ayrı kayıt olarak kalır, sayaç sıfırlanır."""
         if not self.tracker.has_work():
             return
         self.tracker.accrue()
         self.save_old = (self.money(D(self.data["session_amount"])), self.subtitle())
         self.tracker.finish()
-        self.play_save()  # genişlik animasyon bitince küçülür
+        self.play_save()
         self.bubble.set_mode("quit")
         self.update_bars()
         self.save()
-
-    # -- kurlar -------------------------------------------------------------
 
     def apply_rates(self, payload):
         if self.quitting:
@@ -2140,8 +2084,6 @@ class Island(QWidget):
             return
         self.rate_error = message
         self.retry_timer.start()
-
-    # -- konum / kayıt / çıkış ---------------------------------------------
 
     def restore_position(self):
         saved = self.data.get("position")
@@ -2162,13 +2104,13 @@ class Island(QWidget):
             self.store.save()
             self.save_error_shown = False
         except OSError:
-            logging.exception("Durum kaydedilemedi.")
+            logging.exception("Could not save state.")
             if not self.save_error_shown:
                 self.save_error_shown = True
                 ask(
-                    self, "Kaydedilemedi",
-                    "Sayaç çalışmaya devam ediyor ama veriler kaydedilemedi.\n"
-                    "Disk alanını ve klasör izinlerini kontrol et.",
+                    self, "Save failed",
+                    "The timer is still running but your data couldn't be saved.\n"
+                    "Check disk space and folder permissions.",
                 )
 
     def closeEvent(self, event):
@@ -2183,10 +2125,8 @@ class Island(QWidget):
         if self.quitting:
             return
         self.quitting = True
-        for timer in (self.tick_timer, self.save_timer, self.rate_timer,
-                      self.retry_timer, self.hover_timer):
-            timer.stop()
-        for timer in (self.leave_timer, self.bubble_timer):
+        for timer in (self.tick_timer, self.save_timer, self.rate_timer, self.retry_timer,
+                      self.hover_timer, self.leave_timer, self.bubble_timer):
             timer.stop()
         self.total_bar.dismiss(immediate=True)
         self.time_bar.dismiss(immediate=True)
@@ -2199,10 +2139,8 @@ class Island(QWidget):
         QApplication.instance().quit()
 
 
-# ---------------------------------------------------------------- giriş
-
 def main():
-    QLocale.setDefault(QLocale(QLocale.Language.Turkish, QLocale.Country.Turkey))
+    QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
@@ -2227,7 +2165,7 @@ def main():
 
     lock = QLockFile(str(directory / "instance.lock"))
     if not lock.tryLock(100):
-        ask(None, APP_NAME, "Island Tracker zaten çalışıyor.\nSistem tepsisine bak.")
+        ask(None, APP_NAME, "Island Tracker is already running.\nCheck the system tray.")
         return 0
 
     store = Store(directory)
@@ -2235,9 +2173,9 @@ def main():
     island = Island(store, bridge)
 
     def report_exception(exc_type, exc_value, tb):
-        logging.error("Beklenmeyen hata", exc_info=(exc_type, exc_value, tb))
+        logging.error("Unexpected error", exc_info=(exc_type, exc_value, tb))
         try:
-            ask(island, "Beklenmeyen hata", f"{exc_value}\n\nAyrıntılar: {directory / 'app.log'}")
+            ask(island, "Unexpected error", f"{exc_value}\n\nDetails: {directory / 'app.log'}")
         except Exception:
             pass
 

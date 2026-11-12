@@ -4,22 +4,17 @@ A small floating "island" for Windows that sits at the top of your screen and tr
 
 Set your hourly wage, hit start, and watch your session earnings tick up. Everything is saved locally, and you can see your history by day, week or month.
 
-> The app's interface is in Turkish.
-
-<!-- Add a screenshot: save it as docs/screenshot.png and uncomment the line below -->
-<!-- ![Island Tracker](docs/screenshot.png) -->
-
 ## Features
 
-- **Live earnings island**: a compact, always-on-top bar showing your current session's earnings (and optionally its duration)
-- **Start / pause / finish**: from the island itself or from the system tray menu
-- **Smart pausing**: if the computer sleeps or locks, that gap isn't counted
-- **Add time manually**: log work you did while the app was closed, as a total duration or a start–end time range
-- **History**: view, edit and delete entries, with totals for today, this week, this month and all time
-- **Multiple currencies**: TRY, USD, EUR and GBP, with an optional second currency shown alongside
-- **Live exchange rates**: fetched hourly from the free [Frankfurter API](https://frankfurter.dev) (no API key needed)
-- **Dark theme** with a native dark title bar
-- **Local data only**: everything is stored in a JSON file on your computer, with automatic backups if it ever gets corrupted
+- Always-on-top bar showing the current session's earnings, and optionally the elapsed time
+- Start, pause and finish from the island or the tray menu
+- Time the computer spends asleep or locked isn't counted
+- Add time by hand for work you did while the app was closed, as a duration or a start/end time
+- History with edit and delete, plus totals for today, this week, this month and all time
+- 13 currencies (USD, EUR, GBP, TRY, CHF, JPY, CAD, AUD, CNY, INR, BRL, MXN, KRW), with an optional second one shown on hover
+- Exchange rates refreshed hourly from [Frankfurter](https://frankfurter.dev), no API key needed
+- Dark theme with a native dark title bar
+- Everything is stored in a local JSON file, which gets backed up if it's ever unreadable
 
 ## Download
 
