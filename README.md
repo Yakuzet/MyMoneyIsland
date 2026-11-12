@@ -44,7 +44,7 @@ This creates an isolated build environment (`.build-venv`), generates the app ic
 
 ## Where is my data stored?
 
-Your data lives in your user config folder (on Windows, usually `%LOCALAPPDATA%\IslandTracker\`):
+Your data lives in your user config folder (on Windows, inside `%LOCALAPPDATA%\IslandTracker\`):
 
 | File | Purpose |
 |------|---------|
